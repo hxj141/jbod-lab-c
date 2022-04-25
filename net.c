@@ -18,14 +18,36 @@ int cli_sd = -1;
 It may need to call the system call "read" multiple times to reach the given size len. 
 */
 static bool nread(int fd, int len, uint8_t *buf) {
-  return false;
+  //Return false if the buffer isn't big enough
+  if (len > (int) sizeof(buf)) {
+  	return false;
+  }
+  //Read bytes into buffer
+  ssize_t read_check = read(fd, buf, len);
+  //If read fails, return false
+  if (read_check == -1) {
+  	return false;
+  }
+  return true;
+  
 }
 
 /* attempts to write n bytes to fd; returns true on success and false on failure 
 It may need to call the system call "write" multiple times to reach the size len.
 */
 static bool nwrite(int fd, int len, uint8_t *buf) {
-  return false;
+  //Return false if the buffer isn't big enough
+  if (len > (int) sizeof(buf)) {
+  	return false;
+  }
+  //Read bytes into buffer
+  ssize_t write_check = write(fd, buf, len);
+  //If read fails, return false
+  if (write_check == -1) {
+  	return false;
+  }
+  return true;
+  
 }
 
 /* Through this function call the client attempts to receive a packet from sd 
@@ -68,6 +90,30 @@ static bool send_packet(int sd, uint32_t op, uint8_t *block) {
  * you will not call it in mdadm.c
 */
 bool jbod_connect(const char *ip, uint16_t port) {
+
+	// Set up the socket and its properties; port and IP are already passed in and socket descriptor is global so we don't need to set those
+	struct sockaddr_in caddr;
+	caddr.sin_family = AF_INET;
+	caddr.sin_port = htons(port);
+
+	//Sending errors
+	if (inet_aton(ip, &caddr.sin_addr) == 0) {
+		return(false);
+	}
+	//Create socket, return false if connects
+	cli_sd = socket(PF_INET, SOCK_STREAM, 0);
+	if (cli_sd == -1) {
+		printf("Error on socket creation [%s]\n", strerror(errno));
+		return(false);
+	}
+	//Connect to socket, return false if fails
+	if (connect(cli_sd, (const struct sockaddr *)&caddr, sizeof(caddr) == -1)) {
+		printf("Error on socket connect [%s]\n", strerror(errno));
+		return(false);
+	}
+
+	return true;
+	
 }
 
 
@@ -75,6 +121,8 @@ bool jbod_connect(const char *ip, uint16_t port) {
 
 /* disconnects from the server and resets cli_sd */
 void jbod_disconnect(void) {
+	close(cli_sd); //Close socket
+	cli_sd = -1; //reset value of cli_sd
 }
 
 
