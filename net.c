@@ -29,6 +29,8 @@ static bool nread(int fd, int len, uint8_t *buf) {
   	return false;
   }
   return true;
+
+  //get while loop going
   
 }
 
@@ -65,8 +67,44 @@ and then use the length field in the header to determine whether it is needed to
 a block of data from the server. You may use the above nread function here.  
 */
 static bool recv_packet(int sd, uint32_t *op, uint16_t *ret, uint8_t *block) {
-}
+	//Create packet
+	uint8_t packet[HEADER_LEN];
+	//Read in data from packet, if fails, abort
+	bool status = nread(sd, HEADER_LEN, packet);
+	if (status == false) {
+		printf("nread (1/3) invoked in recv_packet failed");
+		return false;
+	}
+	uint16_t packet_size;
+	memcpy(&packet_size, &packet, 2); //Align packet size at position 0 for 2 byte wide
+	memcpy(&op, &packet + 2, 4); //Align opcode at position 2 for 4 bytes wide
+	memcpy(&ret, &packet + 6, 2); //Align return code at position 6 for 2 byte wide
 
+	// Checks if packet header is proper length; if it's just one block behind, read again
+	if (HEADER_LEN == packet_size) {
+		status = nread(sd, HEADER_LEN, block);
+		if (status == false) { //return false if nread fails
+			printf("nread (2/3) (Packet Size: 8 bytes) invoked in recv_packet failed");
+			return false;
+		}
+		return true;
+	}
+	if (HEADER_LEN + 256 == packet_size) {
+		status = nread(sd, HEADER_LEN, block);
+		if (status == false) {
+			printf("nread (2/3) (Packet Size: 264 bytes) invoked in recv_packet failed");
+			return false;
+		}
+		return true;
+	}
+	else {
+		printf("recv_packet failed, incorrect header length of [%i]",packet_size);
+		return false;
+	}
+	// set up network host order
+	return true;
+}
+//read header first, memcpy, then read again
 
 
 /* The client attempts to send a jbod request packet to sd (i.e., the server socket here); 
@@ -80,6 +118,23 @@ The above information (when applicable) has to be wrapped into a jbod request pa
 You may call the above nwrite function to do the actual sending.  
 */
 static bool send_packet(int sd, uint32_t op, uint8_t *block) {
+	//Create packet
+	uint8_t packet[HEADER_LEN];
+	//Align packet size at position 0 for 2 byte wide
+	uint16_t packet_size = HEADER_LEN;
+	memcpy(&packet, &packet_size, 2);
+	//Align opcode at position 2 for 4 bytes wide
+	memcpy(&packet + 2, &op, 4);
+	//Check if there's any block data to write, if so, do so
+	if (block != NULL) {
+		memcpy(&packet + 8, &block, sizeof(block));
+	}
+	int status = nwrite(sd, HEADER_LEN, block);
+	if (status == false) {
+		printf("nwrite failed in send_packet");
+		return false;
+	}
+	return true;
 }
 
 
@@ -134,4 +189,17 @@ The meaning of each parameter is the same as in the original jbod_operation func
 return: 0 means success, -1 means failure.
 */
 int jbod_client_operation(uint32_t op, uint8_t *block) {
+	status = send_packet(cli_sd, op, block);
+	if (status == false) {
+		printf("send_packet failed in jbod_client_operation");
+		return -1;
+	} 
+	status = recv_packet();
 }
+
+
+//What does returncode mean
+//something about between 8 and 264
+
+
+//while loop and endianness
