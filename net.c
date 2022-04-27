@@ -1,3 +1,5 @@
+// test net.c only
+
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +21,7 @@ int cli_sd = -1;
 It may need to call the system call "read" multiple times to reach the given size len. 
 */
 static bool nread(int fd, int len, uint8_t *buf) {
-  //Read bytes into buffer
+  //Read len bytes into buffer
   int remaining = 0;
   while (remaining < len) {
   	int read_check = read(fd, &buf[remaining], len-remaining);
@@ -38,7 +40,7 @@ static bool nread(int fd, int len, uint8_t *buf) {
 It may need to call the system call "write" multiple times to reach the size len.
 */
 static bool nwrite(int fd, int len, uint8_t *buf) {
-  //Fail if buffer is null, length is 0, or the buffer size doesnt match length
+  //Fail if buffer is null or length is 0
   if (buf == NULL) {
   	return false;
   }
@@ -135,9 +137,10 @@ static bool send_packet(int sd, uint32_t op, uint8_t *block) {
 	//Convert to network order
 	op = htonl(op);
 	packet_size = htons(packet_size);
+	//Send Header
 	memcpy(&packet, &packet_size, 2); //Align packet size at position 0 for 2 byte wide
 	memcpy(&packet[2], &op, 4); //Align opcode at position 2 for 4 bytes wide
-	nwrite(sd,HEADER_LEN,packet); //Send header
+	nwrite(sd,HEADER_LEN,packet);
 	//Check if there's any block data to write, if so, do so
 	if (block != NULL) { //Send payload if exists, print error if fails
 		int status = nwrite(sd, 256, block);
@@ -224,9 +227,3 @@ int jbod_client_operation(uint32_t op, uint8_t *block) {
 	return 0; 	
 }
 
-
-//What does returncode mean
-//something about between 8 and 264
-
-
-//while loop and endianness

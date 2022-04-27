@@ -48,6 +48,8 @@ int status = jbod_client_operation(jbod(JBOD_UNMOUNT,0,0,0), NULL); //unmount ta
   }
   return -1;
 }
+
+//Helper function for reading cache
 int cache_read(int diskid, int blockid, uint8_t *buf) {
 //Check to see if this can be gotten in cache; first check if enabled, then try to look up and read
 	if (cache_enabled()) {
@@ -140,8 +142,8 @@ int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
 		if (len - i < BLOCK_LEN) { //If we need to copy less than a full block, then we adjust the copylen size so it won't go out of bounds
 			copylen = len - i;
 		}
-		cache_read(diskid,blockid,temp);
-		//jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); //Reading that section of the disk
+		cache_read(diskid,blockid,temp); //Reading that section of the disk
+		//jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); 
   		memcpy(&buf[i],temp,copylen); //Copying that section into the buffer; if across blocks, second block's data is joined to the first blocks, giving the full data combined in the buffer
 	}
 	return len;
