@@ -11,6 +11,7 @@
 #include "net.h"
 #include "jbod.h"
 
+
 /* the client socket descriptor for the connection to the server */
 int cli_sd = -1;
 
@@ -18,35 +19,37 @@ int cli_sd = -1;
 It may need to call the system call "read" multiple times to reach the given size len. 
 */
 static bool nread(int fd, int len, uint8_t *buf) {
-  //Return false if the buffer isn't big enough
-  if (len > (int) sizeof(buf)) {
-  	return false;
-  }
   //Read bytes into buffer
-  ssize_t read_check = read(fd, buf, len);
-  //If read fails, return false
-  if (read_check == -1) {
-  	return false;
+  int remaining = 0;
+  while (remaining < len) {
+  	ssize_t read_check = read(fd, &buf + (len-remaining), remaining);
+  	remaining = remaining + read_check;	
   }
   return true;
-
-  //get while loop going
-  
+ 
 }
 
 /* attempts to write n bytes to fd; returns true on success and false on failure 
 It may need to call the system call "write" multiple times to reach the size len.
 */
 static bool nwrite(int fd, int len, uint8_t *buf) {
-  //Return false if the buffer isn't big enough
-  if (len > (int) sizeof(buf)) {
+  //Fail if buffer is null
+  if (buf == NULL) {
   	return false;
   }
-  //Read bytes into buffer
-  ssize_t write_check = write(fd, buf, len);
-  //If read fails, return false
-  if (write_check == -1) {
-  	return false;
+  int remaining = len;
+  //Read bytes into buffer until done
+  while (remaining > 0) {
+  	void * tmp = malloc(len);
+  	memcpy(tmp, &buf[len-remaining], remaining);
+  	ssize_t write_check = write(fd, &tmp, remaining);
+  	//troubleshooting
+  	if (write_check == -1) {
+  		printf("[%s]\n", strerror(errno));
+  		return(false);
+  	}
+  	free(tmp);
+  	remaining = remaining - write_check;	
   }
   return true;
   
@@ -76,11 +79,20 @@ static bool recv_packet(int sd, uint32_t *op, uint16_t *ret, uint8_t *block) {
 		return false;
 	}
 	uint16_t packet_size;
-	memcpy(&packet_size, &packet, 2); //Align packet size at position 0 for 2 byte wide
-	memcpy(&op, &packet + 2, 4); //Align opcode at position 2 for 4 bytes wide
-	memcpy(&ret, &packet + 6, 2); //Align return code at position 6 for 2 byte wide
+	memcpy(&packet_size, packet, 2); //Align packet size at position 0 for 2 byte wide
+	memcpy(op, &packet[2], 4); //Align opcode at position 2 for 4 bytes wide
+	memcpy(ret, &packet[6], 2); //Align return code at position 6 for 2 byte wide
 
-	// Checks if packet header is proper length; if it's just one block behind, read again
+	//Put fields in host order
+	packet_size = ntohs(packet_size);
+	*op = ntohl(*op);
+	*ret = ntohs(*ret);
+	
+	// Checks if write failed
+	if (*ret == (uint16_t)-1) {
+		return false;
+	}
+	// Checks if packet header is proper length
 	if (HEADER_LEN == packet_size) {
 		status = nread(sd, HEADER_LEN, block);
 		if (status == false) { //return false if nread fails
@@ -89,8 +101,9 @@ static bool recv_packet(int sd, uint32_t *op, uint16_t *ret, uint8_t *block) {
 		}
 		return true;
 	}
+	// If block was sent too, read it
 	if (HEADER_LEN + 256 == packet_size) {
-		status = nread(sd, HEADER_LEN, block);
+		status = nread(sd, 256, block);
 		if (status == false) {
 			printf("nread (2/3) (Packet Size: 264 bytes) invoked in recv_packet failed");
 			return false;
@@ -118,21 +131,32 @@ The above information (when applicable) has to be wrapped into a jbod request pa
 You may call the above nwrite function to do the actual sending.  
 */
 static bool send_packet(int sd, uint32_t op, uint8_t *block) {
-	//Create packet
+	//Create packet and set its size
 	uint8_t packet[HEADER_LEN];
-	//Align packet size at position 0 for 2 byte wide
-	uint16_t packet_size = HEADER_LEN;
-	memcpy(&packet, &packet_size, 2);
-	//Align opcode at position 2 for 4 bytes wide
-	memcpy(&packet + 2, &op, 4);
+	uint16_t packet_size;
+	if (block == NULL) {
+		packet_size = HEADER_LEN;
+		printf("HEADER LEN: [%ld]",HEADER_LEN);
+		printf("PACKET_SIZE: [%i]",(int)packet_size);
+	}
+	else {
+		packet_size = 256;
+		printf("HEADER LEN: [%ld]",HEADER_LEN);
+		printf("PACKET_SIZE: [%i]",(int)packet_size);
+	}
+	//Convert to network order
+	op = htonl(op);
+	packet_size = htonl(packet_size);
+	memcpy(&packet, &packet_size, 2); //Align packet size at position 0 for 2 byte wide
+	memcpy(&packet[2], &op, 4); //Align opcode at position 2 for 4 bytes wide
+	nwrite(sd,8,packet);
 	//Check if there's any block data to write, if so, do so
 	if (block != NULL) {
-		memcpy(&packet + 8, &block, sizeof(block));
-	}
-	int status = nwrite(sd, HEADER_LEN, block);
-	if (status == false) {
-		printf("nwrite failed in send_packet");
-		return false;
+		int status = nwrite(sd, 256, block);
+		if (status == false) {
+			printf("nwrite failed in send_packet");
+			return false;
+		}
 	}
 	return true;
 }
@@ -162,7 +186,7 @@ bool jbod_connect(const char *ip, uint16_t port) {
 		return(false);
 	}
 	//Connect to socket, return false if fails
-	if (connect(cli_sd, (const struct sockaddr *)&caddr, sizeof(caddr) == -1)) {
+	if (connect(cli_sd, (const struct sockaddr *)&caddr, sizeof(caddr)) == -1) {
 		printf("Error on socket connect [%s]\n", strerror(errno));
 		return(false);
 	}
@@ -189,12 +213,25 @@ The meaning of each parameter is the same as in the original jbod_operation func
 return: 0 means success, -1 means failure.
 */
 int jbod_client_operation(uint32_t op, uint8_t *block) {
-	status = send_packet(cli_sd, op, block);
+	//Send out request, check for failure
+	bool status = send_packet(cli_sd, op, block);
 	if (status == false) {
 		printf("send_packet failed in jbod_client_operation");
 		return -1;
 	} 
-	status = recv_packet();
+	//Prepare variables to store response in
+	uint16_t ret; 
+	//Get response, check for failure
+	status = recv_packet(cli_sd, &op, &ret, block);
+	if (status == false) {
+		printf("recv_packet failed in jbod_client_operation");
+		return -1;
+	}
+	//If return code is -1, fail
+	if (ret == (uint16_t)-1) {
+		return -1;
+	}
+	return 0; 	
 }
 
 
