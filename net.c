@@ -22,7 +22,12 @@ static bool nread(int fd, int len, uint8_t *buf) {
   //Read bytes into buffer
   int remaining = 0;
   while (remaining < len) {
-  	ssize_t read_check = read(fd, &buf + (len-remaining), remaining);
+  	int read_check = read(fd, &buf[remaining], len-remaining);
+  	//If read fails
+  	if (read_check == -1) {
+  		printf("Error on read() [%s]\n", strerror(errno));
+  		return false;
+  	}
   	remaining = remaining + read_check;	
   }
   return true;
@@ -33,23 +38,23 @@ static bool nread(int fd, int len, uint8_t *buf) {
 It may need to call the system call "write" multiple times to reach the size len.
 */
 static bool nwrite(int fd, int len, uint8_t *buf) {
-  //Fail if buffer is null
+  //Fail if buffer is null, length is 0, or the buffer size doesnt match length
   if (buf == NULL) {
   	return false;
   }
-  int remaining = len;
+  if (len == 0) {
+  	return false;
+  }
+  int remaining = 0;
   //Read bytes into buffer until done
-  while (remaining > 0) {
-  	void * tmp = malloc(len);
-  	memcpy(tmp, &buf[len-remaining], remaining);
-  	ssize_t write_check = write(fd, &tmp, remaining);
-  	//troubleshooting
+  while (remaining < len) {
+  	ssize_t write_check = write(fd,&buf[remaining], len-remaining);
+  	//If write fails
   	if (write_check == -1) {
-  		printf("[%s]\n", strerror(errno));
+  		printf("Error on write() [%s]\n", strerror(errno));
   		return(false);
   	}
-  	free(tmp);
-  	remaining = remaining - write_check;	
+  	remaining = remaining + write_check;	
   }
   return true;
   
@@ -75,7 +80,7 @@ static bool recv_packet(int sd, uint32_t *op, uint16_t *ret, uint8_t *block) {
 	//Read in data from packet, if fails, abort
 	bool status = nread(sd, HEADER_LEN, packet);
 	if (status == false) {
-		printf("nread (1/3) invoked in recv_packet failed");
+		printf("nread (1/3) invoked in recv_packet failed\n");
 		return false;
 	}
 	uint16_t packet_size;
@@ -88,30 +93,17 @@ static bool recv_packet(int sd, uint32_t *op, uint16_t *ret, uint8_t *block) {
 	*op = ntohl(*op);
 	*ret = ntohs(*ret);
 	
-	// Checks if write failed
-	if (*ret == (uint16_t)-1) {
-		return false;
-	}
-	// Checks if packet header is proper length
-	if (HEADER_LEN == packet_size) {
-		status = nread(sd, HEADER_LEN, block);
-		if (status == false) { //return false if nread fails
-			printf("nread (2/3) (Packet Size: 8 bytes) invoked in recv_packet failed");
-			return false;
-		}
-		return true;
-	}
 	// If block was sent too, read it
 	if (HEADER_LEN + 256 == packet_size) {
 		status = nread(sd, 256, block);
 		if (status == false) {
-			printf("nread (2/3) (Packet Size: 264 bytes) invoked in recv_packet failed");
+			printf("nread (2/3) (Packet Size: 264 bytes) invoked in recv_packet failed\n");
 			return false;
 		}
 		return true;
 	}
-	else {
-		printf("recv_packet failed, incorrect header length of [%i]",packet_size);
+	else if (packet_size != HEADER_LEN){
+		printf("recv_packet failed, incorrect header length of [%i]\n",packet_size);
 		return false;
 	}
 	// set up network host order
@@ -136,25 +128,21 @@ static bool send_packet(int sd, uint32_t op, uint8_t *block) {
 	uint16_t packet_size;
 	if (block == NULL) {
 		packet_size = HEADER_LEN;
-		printf("HEADER LEN: [%ld]",HEADER_LEN);
-		printf("PACKET_SIZE: [%i]",(int)packet_size);
 	}
 	else {
-		packet_size = 256;
-		printf("HEADER LEN: [%ld]",HEADER_LEN);
-		printf("PACKET_SIZE: [%i]",(int)packet_size);
+		packet_size = 256 + HEADER_LEN;
 	}
 	//Convert to network order
 	op = htonl(op);
-	packet_size = htonl(packet_size);
+	packet_size = htons(packet_size);
 	memcpy(&packet, &packet_size, 2); //Align packet size at position 0 for 2 byte wide
 	memcpy(&packet[2], &op, 4); //Align opcode at position 2 for 4 bytes wide
-	nwrite(sd,8,packet);
+	nwrite(sd,HEADER_LEN,packet); //Send header
 	//Check if there's any block data to write, if so, do so
-	if (block != NULL) {
+	if (block != NULL) { //Send payload if exists, print error if fails
 		int status = nwrite(sd, 256, block);
 		if (status == false) {
-			printf("nwrite failed in send_packet");
+			printf("nwrite failed in send_packet (sending payload failed)\n");
 			return false;
 		}
 	}
@@ -183,7 +171,7 @@ bool jbod_connect(const char *ip, uint16_t port) {
 	cli_sd = socket(PF_INET, SOCK_STREAM, 0);
 	if (cli_sd == -1) {
 		printf("Error on socket creation [%s]\n", strerror(errno));
-		return(false);
+		return false;
 	}
 	//Connect to socket, return false if fails
 	if (connect(cli_sd, (const struct sockaddr *)&caddr, sizeof(caddr)) == -1) {
@@ -227,10 +215,12 @@ int jbod_client_operation(uint32_t op, uint8_t *block) {
 		printf("recv_packet failed in jbod_client_operation");
 		return -1;
 	}
+
 	//If return code is -1, fail
 	if (ret == (uint16_t)-1) {
 		return -1;
 	}
+	
 	return 0; 	
 }
 

@@ -7,6 +7,7 @@
 
 #include "mdadm.h"
 #include "jbod.h"
+#include "net.h"
 
 //Defining parameters for easier use later
 #define DISK_COUNT 16
@@ -41,11 +42,27 @@ int status = jbod_client_operation(jbod(JBOD_MOUNT,0,0,0), NULL); //as per the j
   return -1;
 }
 int mdadm_unmount(void) {
-int status = jbod_operation(jbod(JBOD_UNMOUNT,0,0,0), NULL); //unmount takes an identical structure to mount
+int status = jbod_client_operation(jbod(JBOD_UNMOUNT,0,0,0), NULL); //unmount takes an identical structure to mount
   if (status == 0) {
   	return 1;
   }
   return -1;
+}
+int cache_read(int diskid, int blockid, uint8_t *buf) {
+//Check to see if this can be gotten in cache; first check if enabled, then try to look up and read
+	if (cache_enabled()) {
+		int success = cache_lookup(diskid, blockid, buf);
+		if (success == 1) {
+			return 0;
+		}
+	}
+	int status = jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), buf);
+	if (status == 0) {
+		if (cache_enabled()) {
+			cache_insert(diskid, blockid, buf);
+		}
+	}
+	return status; 
 }
 
 int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
@@ -68,6 +85,7 @@ int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
 
 	int seekdisk = jbod_client_operation(jbod(JBOD_SEEK_TO_DISK,diskid,0,0), NULL); //seeks to disk
 	int seekblock = jbod_client_operation(jbod(JBOD_SEEK_TO_BLOCK,0,0,blockid), NULL); //locates the block next
+
 		
 	if (seekdisk == -1) // If seekdisk fails, return failure on function
 	{
@@ -77,11 +95,8 @@ int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
 	{
 		return -1;
 	}
-	//Check to see if this can be gotten in cache; first check if enabled, then try to look up and read
-	if (cache_enabled() == true) {
-		cache_lookup(diskid, blockid, buf);
-		jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), buf);
-	}
+
+
 	//Preparing for and performing the actual READ operation
 	uint8_t temp[256]; //Buffer to represent the currently read section of memory
 	uint32_t i = 0; //Set the incrementer
@@ -90,7 +105,8 @@ int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
 	// Copying first chunk into buffer. Also used when reading across disks. 
 	uint32_t remaining_len = addr % BLOCK_LEN; //Amount of bytes to copy. Defined as distance from boundary to the first block. Additional modulo to ensure multiples of 256 are functionally zero.
 	if (remaining_len != 0) { //Formula in the above line will equal zero if buffer is contained within this section of memory. Checking for it will tell us if this is across blocks.
-		jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); //Reading data into temp
+		cache_read(diskid,blockid,temp);
+		//jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); //Reading data into temp
 		if(len < 256 - remaining_len) {
 			memcpy(buf, &temp[remaining_len], len); // Copies the data in the first block over, the second block's data will get copied over in line 111
 			i += len; //Setting where in buffer the next block's data is going to go to properly combine
@@ -124,8 +140,8 @@ int mdadm_read(uint32_t addr, uint32_t len, uint8_t *buf) {
 		if (len - i < BLOCK_LEN) { //If we need to copy less than a full block, then we adjust the copylen size so it won't go out of bounds
 			copylen = len - i;
 		}
-
-		jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); //Reading that section of the disk
+		cache_read(diskid,blockid,temp);
+		//jbod_client_operation(jbod(JBOD_READ_BLOCK,0,0,0), temp); //Reading that section of the disk
   		memcpy(&buf[i],temp,copylen); //Copying that section into the buffer; if across blocks, second block's data is joined to the first blocks, giving the full data combined in the buffer
 	}
 	return len;
